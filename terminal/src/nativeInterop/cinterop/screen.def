@@ -1,0 +1,80 @@
+headers = signal.h unistd.h
+package = dev.macmetaldemo.terminal.nativeScreen
+---
+#include <signal.h>
+#include <unistd.h>
+#include <string.h>
+
+static const int screen_signals[] = { SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGTSTP, SIGCONT };
+static struct sigaction screen_previous[6];
+static volatile sig_atomic_t screen_active = 0;
+
+static void screen_write(const char *text, size_t length) {
+    while (length > 0) {
+        ssize_t count = write(STDOUT_FILENO, text, length);
+        if (count <= 0) return;
+        text += count;
+        length -= (size_t)count;
+    }
+}
+static void screen_handler(int sig) {
+    static const char leave[] = "\033[?47l";
+    static const char enter[] = "\033[?47h";
+    if (!screen_active) return;
+    if (sig == SIGCONT) {
+        screen_write(enter, sizeof(enter) - 1);
+        return;
+    }
+    screen_write(leave, sizeof(leave) - 1);
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = SIG_DFL;
+    sigemptyset(&action.sa_mask);
+    sigaction(sig, &action, NULL);
+    sigset_t unblocked;
+    sigemptyset(&unblocked);
+    sigaddset(&unblocked, sig);
+    sigprocmask(SIG_UNBLOCK, &unblocked, NULL);
+    kill(getpid(), sig);
+    if (sig == SIGTSTP) {
+        action.sa_handler = screen_handler;
+        action.sa_flags = SA_RESTART;
+        sigaction(sig, &action, NULL);
+    }
+}
+static int screen_open(void) {
+    sigset_t blocked, previous_mask;
+    sigemptyset(&blocked);
+    for (int i = 0; i < 6; i++) sigaddset(&blocked, screen_signals[i]);
+    sigprocmask(SIG_BLOCK, &blocked, &previous_mask);
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = screen_handler;
+    sigemptyset(&action.sa_mask);
+    for (int i = 0; i < 6; i++) sigaddset(&action.sa_mask, screen_signals[i]);
+    action.sa_flags = SA_RESTART;
+    for (int i = 0; i < 6; i++) {
+        if (sigaction(screen_signals[i], &action, &screen_previous[i]) != 0) {
+            while (--i >= 0) sigaction(screen_signals[i], &screen_previous[i], NULL);
+            sigprocmask(SIG_SETMASK, &previous_mask, NULL);
+            return 0;
+        }
+    }
+    screen_active = 1;
+    static const char enter[] = "\033[?47h\033[2J\033[H";
+    screen_write(enter, sizeof(enter) - 1);
+    sigprocmask(SIG_SETMASK, &previous_mask, NULL);
+    return 1;
+}
+static void screen_close(void) {
+    if (!screen_active) return;
+    sigset_t blocked, previous_mask;
+    sigemptyset(&blocked);
+    for (int i = 0; i < 6; i++) sigaddset(&blocked, screen_signals[i]);
+    sigprocmask(SIG_BLOCK, &blocked, &previous_mask);
+    screen_active = 0;
+    static const char leave[] = "\033[?47l";
+    screen_write(leave, sizeof(leave) - 1);
+    for (int i = 0; i < 6; i++) sigaction(screen_signals[i], &screen_previous[i], NULL);
+    sigprocmask(SIG_SETMASK, &previous_mask, NULL);
+}
