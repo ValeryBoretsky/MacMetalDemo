@@ -8,6 +8,7 @@ kotlin {
             implementation(project(":compute-cpu"))
             implementation(project(":compute-metal"))
             implementation(project(":algorithm-nbody"))
+            implementation(project(":algorithm-game-of-life"))
             implementation(project(":monitoring-macos"))
             implementation(project(":terminal"))
         }

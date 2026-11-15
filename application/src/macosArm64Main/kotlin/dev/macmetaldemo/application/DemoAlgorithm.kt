@@ -12,6 +12,8 @@ interface DemoAlgorithm {
     val info: AlgorithmInfo
     val parameters: List<ParameterDefinition>
     val supportedModes: Set<ExecutionMode>
+    fun resolveParameter(definition: ParameterDefinition, accepted: ParameterValues): ParameterDefinition = definition
+    fun visualizationTitle(values: ParameterValues): String? = visualizationTitle
     fun availability(mode: ExecutionMode): ModeAvailability
     fun validate(values: ParameterValues): ParameterValidation
     fun describe(values: ParameterValues): RunDescriptor

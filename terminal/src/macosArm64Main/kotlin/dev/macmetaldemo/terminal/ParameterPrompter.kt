@@ -25,13 +25,15 @@ internal fun valueText(value: ParameterValue): String = when (value) {
 }
 
 class ParameterPrompter(private val io: TerminalIo) {
-    fun prompt(definitions: List<ParameterDefinition>, remembered: ParameterValues?): ParameterValues? {
+    fun prompt(
+        definitions: List<ParameterDefinition>,
+        remembered: ParameterValues?,
+        resolve: (ParameterDefinition, ParameterValues) -> ParameterDefinition = { definition, _ -> definition },
+    ): ParameterValues? {
         val values = mutableMapOf<String, ParameterValue>()
-        for (definition in definitions) {
-            val default = remembered?.get(definition.id) ?: when (definition) {
-                is ParameterDefinition.Integer -> ParameterValue.Integer(definition.defaultValue)
-                is ParameterDefinition.Decimal -> ParameterValue.Decimal(definition.defaultValue)
-            }
+        for (declared in definitions) {
+            val definition = resolve(declared, ParameterValues(values))
+            val default = defaultValue(definition, remembered?.get(definition.id))
             while (true) {
                 io.write("${definition.label} [${valueText(default)}]: ")
                 val input = io.readLine() ?: return null
@@ -45,4 +47,14 @@ class ParameterPrompter(private val io: TerminalIo) {
         }
         return ParameterValues(values)
     }
+
+    private fun defaultValue(definition: ParameterDefinition, remembered: ParameterValue?): ParameterValue =
+        when (definition) {
+            is ParameterDefinition.Integer -> ParameterValue.Integer(
+                ((remembered as? ParameterValue.Integer)?.value ?: definition.defaultValue)
+                    .coerceIn(definition.minimum, definition.maximum))
+            is ParameterDefinition.Decimal -> ParameterValue.Decimal(
+                ((remembered as? ParameterValue.Decimal)?.value?.takeIf { it.isFinite() } ?: definition.defaultValue)
+                    .coerceIn(definition.minimum, definition.maximum))
+        }
 }

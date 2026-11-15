@@ -60,13 +60,14 @@ class TerminalSession(private val registry: AlgorithmRegistry, private val drive
                 screen.clear()
                 var values: ParameterValues
                 while (true) {
-                    values = ParameterPrompter(io).prompt(algorithm.parameters, remembered[algorithm.info.id]) ?: return 0
+                    values = ParameterPrompter(io).prompt(algorithm.parameters, remembered[algorithm.info.id],
+                        algorithm::resolveParameter) ?: return 0
                     when (val checked = algorithm.validate(values)) {
                         is ParameterValidation.Valid -> { values = checked.values; break }
                         is ParameterValidation.Invalid -> checked.messages.values.forEach { io.write("$it\n") }
                     }
                 }
-                val title = if (screen.active) try { algorithm.visualizationTitle } catch (_: Throwable) { null } else null
+                val title = if (screen.active) try { algorithm.visualizationTitle(values) } catch (_: Throwable) { null } else null
                 val visualization = if (title != null) {
                     promptVisualization(rememberedVisualization[algorithm.info.id] ?: true) ?: return 0
                 } else false

@@ -12,11 +12,11 @@ class LiveRunDriver(
     private val capabilities: () -> TerminalCapabilities,
     private val screen: TerminalScreen = PlainTerminalScreen,
     private val algorithmName: (String) -> String = { it },
-    private val visualizationTitle: (String) -> String? = { null },
+    private val visualizationTitle: (String, ParameterValues) -> String? = { _, _ -> null },
 ) : RunDriver {
     override fun run(request: RunRequest): RunOutcome {
         val title = if (request.visualizationEnabled && screen.active) {
-            try { visualizationTitle(request.algorithmId) } catch (_: Throwable) { null }
+            try { visualizationTitle(request.algorithmId, request.parameters) } catch (_: Throwable) { null }
         } else null
         return run(request, title)
     }
@@ -113,13 +113,15 @@ class LiveRunDriver(
                         ) + listOfNotNull(backend?.workerCount?.let { "CPU workers: $it" },
                             backend?.deviceName?.let { "Device: $it" })
                     } else emptyList()
-                    fun measurements(space: TerminalCapabilities): List<String> {
-                        val available = space.copy(rows = (space.rows - context.size).coerceAtLeast(0))
-                        return context + renderer.lines(snapshot, visibleResources, now, !caps.unicode, available)
+                    fun measurements(space: TerminalCapabilities, contextRows: List<String>): List<String> {
+                        val available = space.copy(rows = (space.rows - contextRows.size).coerceAtLeast(0))
+                        return contextRows + renderer.lines(snapshot, visibleResources, now, !caps.unicode, available)
                     }
+                    fun fixedMeasurements(space: TerminalCapabilities) =
+                        measurements(space, wrapContext(context, space.columns - 1))
                     val canShow = drawingEnabled && screen.active && title != null && descriptor != null && snapshot.phase == RunPhase.RUNNING
-                    val layout = if (canShow) renderer.fitVisualization(caps, ::measurements) else null
-                    val selectedMeasurements = layout?.measurements ?: measurements(caps)
+                    val layout = if (canShow) renderer.fitVisualization(caps, ::fixedMeasurements) else null
+                    val selectedMeasurements = layout?.measurements ?: fixedMeasurements(caps)
                     val visible = setVisibility(layout != null)
                     val fixed = screen.active && (descriptor != null || snapshot.phase != RunPhase.PREPARING) &&
                         renderer.fits(selectedMeasurements, caps)
@@ -149,7 +151,8 @@ class LiveRunDriver(
                             fixedPanelVisible = true
                         } else {
                             erasePanel()
-                            io.write(lines.joinToString("\n", postfix = "\n"))
+                            val scrolling = if (context.isEmpty()) lines else measurements(caps, context)
+                            io.write(scrolling.joinToString("\n", postfix = "\n"))
                         }
                         lastRender = now
                     }
@@ -164,6 +167,23 @@ class LiveRunDriver(
             }
         } finally {
             (sampler as? AutoCloseable)?.close()
+        }
+    }
+}
+
+private fun wrapContext(lines: List<String>, width: Int): List<String> {
+    if (width <= 0 || lines.all { it.length <= width }) return lines
+    return buildList {
+        for (line in lines) {
+            var start = 0
+            while (line.length - start > width) {
+                val prefix = line.substring(start, start + width)
+                val separator = prefix.indexOfLast { it == ',' || it == ' ' }
+                val size = if (separator > 0) separator + 1 else width
+                add(prefix.take(size).trimEnd())
+                start += size
+            }
+            add(line.substring(start))
         }
     }
 }

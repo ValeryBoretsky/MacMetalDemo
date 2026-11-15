@@ -22,6 +22,78 @@ private open class Example(val id: String = "example") : DemoAlgorithm {
 private fun success(request: RunRequest, algorithm: Example): RunOutcome.Success = RunOutcome.Success(RunResult(request, algorithm.describe(request.parameters), BackendInfo(1, null), CheckedSummary(listOf(ResultFieldValue("sum", "7"))), 2, 4, 8))
 
 class TerminalSessionTest {
+    private class ReservationAlgorithm : Example("reservations") {
+        override val parameters = listOf(
+            ParameterDefinition.Integer("seats", "Seats", 10, 1, 10, "Enter 1 through 10 seats."),
+            ParameterDefinition.Integer("tickets", "Tickets", 8, 0, 10, "Enter 0 through 10 tickets."),
+        )
+
+        override fun resolveParameter(definition: ParameterDefinition, accepted: ParameterValues): ParameterDefinition {
+            if (definition.id != "tickets") return definition
+            val seats = (accepted["seats"] as ParameterValue.Integer).value
+            return (definition as ParameterDefinition.Integer).copy(defaultValue = minOf(8, seats), maximum = seats,
+                errorMessage = "Enter 0 through $seats tickets.")
+        }
+    }
+
+    @Test fun dependentLimitRepeatsOnlyTheRejectedPrompt() {
+        val algorithm = ReservationAlgorithm()
+        val registry = AlgorithmRegistry(listOf(algorithm))
+        val io = Io(listOf("1", "1", "3", "4", "2", "0"))
+        val requests = mutableListOf<RunRequest>()
+        TerminalSession(registry, RunDriver { request ->
+            requests.add(request)
+            success(request, algorithm)
+        }, RunHistory(registry), io).run()
+        assertEquals(ParameterValue.Integer(2), requests.single().parameters["tickets"])
+        assertEquals(1, Regex("Seats \\[10\\]:").findAll(io.output).count())
+        assertEquals(2, Regex("Tickets \\[3\\]:").findAll(io.output).count())
+        assertContains(io.output, "Enter 0 through 3 tickets.")
+    }
+
+    @Test fun dependentDefaultsUseCurrentLimitsAndRememberedValues() {
+        val algorithm = ReservationAlgorithm()
+        val registry = AlgorithmRegistry(listOf(algorithm))
+        val io = Io(listOf("1", "1", "3", "", "1", "1", "7", "", "1", "1", "2", "", "0"))
+        val requests = mutableListOf<RunRequest>()
+        TerminalSession(registry, RunDriver { request ->
+            requests.add(request)
+            success(request, algorithm)
+        }, RunHistory(registry), io).run()
+        assertEquals(listOf(3L, 3L, 2L), requests.map { (it.parameters["tickets"] as ParameterValue.Integer).value })
+        assertContains(io.output, "Tickets [3]:")
+        assertContains(io.output, "Tickets [2]:")
+    }
+
+    @Test fun visualizationTitleUsesValidatedParameters() {
+        val algorithm = object : Example() {
+            override val visualizationTitle = "Static title"
+            override fun validate(values: ParameterValues) = ParameterValidation.Valid(
+                ParameterValues(values.asMap() + ("items" to ParameterValue.Integer(6))))
+
+            override fun visualizationTitle(values: ParameterValues): String =
+                "${(values["items"] as ParameterValue.Integer).value} bars"
+        }
+        val registry = AlgorithmRegistry(listOf(algorithm))
+        val io = Io(listOf("1", "1", "3", "", "", "", "0"))
+        val screen = object : TerminalScreen {
+            override val active = true
+            override fun clear() = Unit
+            override fun close() = Unit
+        }
+        var title: String? = null
+        val driver = object : RunDriver {
+            override fun run(request: RunRequest): RunOutcome = fail("The session must pass the title.")
+            override fun run(request: RunRequest, visualizationTitle: String?): RunOutcome {
+                title = visualizationTitle
+                assertEquals(ParameterValue.Integer(6), request.parameters["items"])
+                return success(request, algorithm)
+            }
+        }
+        assertEquals(0, TerminalSession(registry, driver, RunHistory(registry), io, screen).run())
+        assertEquals("6 bars", title)
+    }
+
     @Test fun failedVisualizationTitleDoesNotStopRun() {
         val algorithm = object : Example() {
             override val visualizationTitle: String? get() = error("Title failed.")
@@ -102,7 +174,7 @@ class TerminalSessionTest {
         }
         val driver = LiveRunDriver(worker, clock, ResourceSampler { ResourceSnapshot(time, emptyList(), null, null) },
             WaitStrategy { time += it }, io, { TerminalCapabilities(true, "xterm", 120, 32, false) }, screen,
-            { registry.find(it)?.info?.name ?: it }, { registry.find(it)?.visualizationTitle })
+            { registry.find(it)?.info?.name ?: it }, { id, values -> registry.find(id)?.visualizationTitle(values) })
         assertEquals(0, TerminalSession(registry, driver, RunHistory(registry), io, screen).run())
         assertTrue(io.output.contains("1  sorting - description"))
         assertTrue(io.output.contains("Sorting bars"))

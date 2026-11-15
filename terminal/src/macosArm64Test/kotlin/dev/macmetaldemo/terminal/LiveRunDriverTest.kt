@@ -19,6 +19,29 @@ class LiveRunDriverTest {
         override fun clear() = io.write("\u001b[2J\u001b[H")
         override fun close() = Unit
     }
+    @Test fun directRunUsesParametersForVisualizationTitle() {
+        val clock = Clock()
+        val io = Output()
+        val selected = request.copy(parameters = ParameterValues(mapOf("items" to ParameterValue.Integer(7))),
+            visualizationEnabled = true)
+        val descriptor = RunDescriptor(ComparisonKey("test", "1", "items=7", "", "work"),
+            selected.parameters, emptyMap(), WorkDefinition("work", "unit", 1.0, "unit/s"),
+            2, 2, "unit", emptyList())
+        val handle = object : RunHandle {
+            override fun latest() = snapshot.copy(descriptor = descriptor)
+            override fun outcome() = if (clock.now >= 400_000_000L) RunOutcome.Failure("done", false) else null
+            override fun awaitCompletion() = outcome()!!
+            override fun latestVisualization() = VisualizationFrame(1, BooleanArray(80 * 60) { it == 0 })
+        }
+        LiveRunDriver(RunWorker { handle }, clock,
+            ResourceSampler { ResourceSnapshot(clock.now, emptyList(), null, null) },
+            WaitStrategy { clock.now += it }, io, { TerminalCapabilities(true, "xterm", 120, 32, false) },
+            activeScreen(io), visualizationTitle = { id, values ->
+                "$id ${(values["items"] as ParameterValue.Integer).value} bars"
+            }).run(selected)
+        assertContains(io.text, "test 7 bars")
+    }
+
     private fun exercise(capabilities: (Long) -> TerminalCapabilities, active: Boolean = false, sample: (Long) -> ResourceSnapshot): Pair<Output, List<Long>> {
         val clock = Clock()
         val io = Output()
@@ -59,7 +82,7 @@ class LiveRunDriverTest {
             ResourceSampler { ResourceSnapshot(clock.now, (0 until 10).map { CoreLoad(it, 10.0) }, 10.0, null) },
             WaitStrategy { clock.now += it }, io,
             { TerminalCapabilities(true, "xterm", if (clock.now in 600_000_000L until 1_000_000_000L) 30 else 120, 32, false) },
-            activeScreen(io), visualizationTitle = { titleLookups++; "Sorting bars" }).run(request.copy(visualizationEnabled = true))
+            activeScreen(io), visualizationTitle = { _, _ -> titleLookups++; "Sorting bars" }).run(request.copy(visualizationEnabled = true))
         assertEquals(1, titleLookups)
         assertTrue(times.isNotEmpty())
         assertTrue(times.all { it >= 200_000_000L && it !in 600_000_000L until 1_000_000_000L })
@@ -87,7 +110,7 @@ class LiveRunDriverTest {
         LiveRunDriver(RunWorker { handle }, clock, ResourceSampler {
             ResourceSnapshot(clock.now, (0 until 10).map { CoreLoad(it, 10.0) }, 10.0, null)
         }, WaitStrategy { clock.now += it }, io, { TerminalCapabilities(true, "xterm", 80, 33, false) },
-            activeScreen(io), visualizationTitle = { "Picture" }).run(request.copy(visualizationEnabled = true))
+            activeScreen(io), visualizationTitle = { _, _ -> "Picture" }).run(request.copy(visualizationEnabled = true))
 
         val panel = assertNotNull(io.writes.firstOrNull { "Picture" in it })
         val beforePicture = panel.substringBefore("Picture")
@@ -113,7 +136,7 @@ class LiveRunDriverTest {
             ResourceSnapshot(clock.now, (0 until 10).map { CoreLoad(it, 10.0) }, 10.0, null,
                 listOf(GpuLoad(7u, 16, 94.0)))
         }, WaitStrategy { clock.now += it }, io, { TerminalCapabilities(true, "xterm", 120, 32, false) },
-            activeScreen(io), visualizationTitle = { "Picture" }).run(request.copy(mode = ExecutionMode.METAL, visualizationEnabled = true))
+            activeScreen(io), visualizationTitle = { _, _ -> "Picture" }).run(request.copy(mode = ExecutionMode.METAL, visualizationEnabled = true))
         val picture = io.writes.first { it.contains("Picture") }
         assertTrue(picture.lineSequence().first().contains("Algorithm: test"), picture)
         for (core in 0 until 10) assertTrue(picture.contains("System CPU $core "), picture)
@@ -141,7 +164,7 @@ class LiveRunDriverTest {
         val result = LiveRunDriver(RunWorker { handle }, clock,
             ResourceSampler { ResourceSnapshot(clock.now, listOf(CoreLoad(0, 10.0)), 10.0, null) },
             WaitStrategy { clock.now += it }, io, { TerminalCapabilities(true, "xterm", 120, 32, false) },
-            activeScreen(io), visualizationTitle = { "Picture" }).run(request.copy(visualizationEnabled = true))
+            activeScreen(io), visualizationTitle = { _, _ -> "Picture" }).run(request.copy(visualizationEnabled = true))
         assertEquals(expected, result)
         assertEquals(0, requests)
         assertTrue(io.text.contains("System CPU 0"))
@@ -166,7 +189,7 @@ class LiveRunDriverTest {
         val result = LiveRunDriver(RunWorker { handle }, clock,
             ResourceSampler { ResourceSnapshot(clock.now, listOf(CoreLoad(0, 10.0)), 10.0, null) },
             WaitStrategy { clock.now += it }, io, { TerminalCapabilities(true, "xterm", 120, 32, false) },
-            activeScreen(io), visualizationTitle = { "Picture" }).run(request.copy(visualizationEnabled = true))
+            activeScreen(io), visualizationTitle = { _, _ -> "Picture" }).run(request.copy(visualizationEnabled = true))
         assertIs<RunOutcome.Failure>(result)
         assertEquals(1, requests)
         assertTrue(hidden)
