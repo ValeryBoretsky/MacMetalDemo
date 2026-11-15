@@ -9,6 +9,7 @@ kotlin {
             implementation(project(":compute-metal"))
             implementation(project(":algorithm-nbody"))
             implementation(project(":algorithm-game-of-life"))
+            implementation(project(":algorithm-rain-water"))
             implementation(project(":monitoring-macos"))
             implementation(project(":terminal"))
         }

@@ -12,6 +12,24 @@ import kotlin.test.assertSame
 
 class MetalOwnershipTest {
     @Test
+    fun batchCommitsAndWaitsOnceForAllSteps() {
+        val operations = FakeCommandOperations()
+        val native = FakeMetalCalls(operations = operations)
+        val program = DefaultMetalRuntimeFactory(native).open("source", "entry")
+        try {
+            val buffer = program.createBuffer(32)
+            val steps = (1..4).map { MetalDispatch(listOf(buffer), byteArrayOf(it.toByte()), it) }
+            val states = mutableListOf<GpuCommandState>()
+            program.dispatchBatch(steps, GpuStatusSink { states.add(it.state) })
+            assertEquals(1, native.acquired.count { it == "command" })
+            assertEquals(listOf(1, 2, 3, 4), native.steps.map { it.elementCount })
+            assertEquals(listOf(1, 2, 3, 4), native.steps.map { it.constants.single().toInt() })
+            assertEquals(listOf("commit", "wait", "status", "error", "start", "end", "close"), operations.events)
+            assertEquals(listOf(GpuCommandState.PREPARING, GpuCommandState.SUBMITTED, GpuCommandState.COMPLETED), states)
+        } finally { program.close() }
+    }
+
+    @Test
     fun successiveDispatchesKeepOnlyMeasuredDurationThroughController() {
         val native = FakeMetalCalls(start = 1.0, end = 2.0)
         val program = DefaultMetalRuntimeFactory(native).open("source", "entry")
@@ -230,6 +248,7 @@ private class FakeMetalCalls(
     private val completionError: String? = null,
     private val operations: FakeCommandOperations? = null,
 ) : MetalNativeCalls {
+    var steps = emptyList<NativeDispatch>()
     val acquired = mutableListOf<String>()
     val closed = mutableListOf<String>()
     override val deviceName = "test device"
@@ -245,7 +264,8 @@ private class FakeMetalCalls(
             override fun close() = owner.close()
         }
     }
-    override fun command(queue: NativeHandle, pipeline: NativeHandle, buffers: List<NativeBuffer>, constants: ByteArray, count: Int): NativeCommand {
+    override fun command(queue: NativeHandle, pipeline: NativeHandle, steps: List<NativeDispatch>): NativeCommand {
+        this.steps = steps
         val owner = handle("command")
         return object : NativeCommand {
             override fun execute(submitted: () -> Unit): NativeCompletion {

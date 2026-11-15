@@ -12,6 +12,8 @@ internal interface NativeBuffer : NativeHandle {
 }
 internal interface NativeCommand : NativeHandle { fun execute(submitted: () -> Unit): NativeCompletion }
 internal data class NativeCompletion(val completed: Boolean, val start: Double, val end: Double, val error: String?)
+internal class NativeDispatch(val buffers: List<NativeBuffer>, val constants: ByteArray, val elementCount: Int)
+
 internal interface MetalNativeCalls {
     val deviceName: String
     val deviceRegistryId: ULong? get() = null
@@ -20,7 +22,7 @@ internal interface MetalNativeCalls {
     fun library(source: String): NativeHandle
     fun pipeline(library: NativeHandle, entry: String): NativeHandle
     fun buffer(size: Long): NativeBuffer
-    fun command(queue: NativeHandle, pipeline: NativeHandle, buffers: List<NativeBuffer>, constants: ByteArray, count: Int): NativeCommand
+    fun command(queue: NativeHandle, pipeline: NativeHandle, steps: List<NativeDispatch>): NativeCommand
 }
 
 internal class MetalProgramAdapter(
@@ -44,14 +46,22 @@ internal class MetalProgramAdapter(
     }
 
     override fun dispatch(buffers: List<MetalBuffer>, constants: ByteArray, elementCount: Int, gpu: GpuStatusSink): Long? {
+        return dispatchBatch(listOf(MetalDispatch(buffers, constants, elementCount)), gpu)
+    }
+
+    override fun dispatchBatch(steps: List<MetalDispatch>, gpu: GpuStatusSink): Long? {
         check(!closed)
-        require(elementCount > 0)
-        val handles = buffers.map { buffer ->
-            require(buffer is MetalBufferAdapter && buffer.owner === this)
-            buffer.handle()
+        require(steps.isNotEmpty())
+        val dispatches = steps.map { step ->
+            require(step.elementCount > 0)
+            val handles = step.buffers.map { buffer ->
+                require(buffer is MetalBufferAdapter && buffer.owner === this)
+                buffer.handle()
+            }
+            NativeDispatch(handles, step.constants, step.elementCount)
         }
         gpu.publish(GpuCommandStatus(GpuCommandState.PREPARING, null))
-        val command = checkNotNull(native).command(queue, pipeline, handles, constants, elementCount)
+        val command = checkNotNull(native).command(queue, pipeline, dispatches)
         try {
             val result = command.execute { gpu.publish(GpuCommandStatus(GpuCommandState.SUBMITTED, null)) }
             check(result.completed && result.error == null) { result.error ?: "Metal command failed" }

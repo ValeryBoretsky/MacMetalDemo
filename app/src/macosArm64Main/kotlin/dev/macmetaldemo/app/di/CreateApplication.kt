@@ -9,13 +9,16 @@ import dev.macmetaldemo.metal.DefaultMetalRuntimeFactory
 import dev.macmetaldemo.monitoring.MacosClock
 import dev.macmetaldemo.monitoring.MacosResourceSampler
 import dev.macmetaldemo.nbody.NBodyAlgorithm
+import dev.macmetaldemo.rain.RainWaterAlgorithm
 import dev.macmetaldemo.terminal.*
 import platform.posix.usleep
 
 fun createApplication(io: TerminalIo, screen: TerminalScreen = PlainTerminalScreen): TerminalSession {
     val cpu = DefaultCpuRuntimeFactory()
     val metal = DefaultMetalRuntimeFactory()
-    val registry = AlgorithmRegistry(listOf(NBodyAlgorithm(cpu, metal), GameOfLifeAlgorithm(cpu, metal)))
+    val registry = AlgorithmRegistry(listOf(
+        NBodyAlgorithm(cpu, metal), GameOfLifeAlgorithm(cpu, metal), RainWaterAlgorithm(cpu, metal),
+    ))
     val history = RunHistory(registry)
     val clock = MacosClock()
     val worker = NativeRunWorker(RunController(registry, clock))

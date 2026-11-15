@@ -43,11 +43,11 @@ internal class MetalSystemCalls private constructor(private val device: MTLDevic
             ?: error("Cannot allocate Metal buffer")
         SystemBuffer(buffer)
     }
-    override fun command(queue: NativeHandle, pipeline: NativeHandle, buffers: List<NativeBuffer>, constants: ByteArray, count: Int): NativeCommand = autoreleasepool {
+    override fun command(queue: NativeHandle, pipeline: NativeHandle, steps: List<NativeDispatch>): NativeCommand = autoreleasepool {
         val command = (queue as Holder<MTLCommandQueueProtocol>).value().commandBuffer()
             ?: error("Cannot create Metal command")
         val state = (pipeline as Holder<MTLComputePipelineStateProtocol>).value()
-        SystemCommand(command, state, buffers.map { (it as SystemBuffer).value() }, constants, count)
+        SystemCommand(command, state, steps)
     }
 }
 
@@ -78,24 +78,33 @@ internal class SystemBuffer(private var reference: MTLBufferProtocol?) : NativeB
 internal class SystemCommand(
     private var command: MTLCommandBufferProtocol?,
     private var state: MTLComputePipelineStateProtocol?,
-    private var buffers: List<MTLBufferProtocol>,
-    private val constants: ByteArray,
-    private val count: Int,
+    private var steps: List<NativeDispatch>,
 ) : NativeCommand {
     override fun execute(submitted: () -> Unit): NativeCompletion = autoreleasepool {
         val command = checkNotNull(command)
         val state = checkNotNull(state)
         executeMetalCommand(object : CommandOperations {
             override fun commit() {
-                val encoder = command.computeCommandEncoder() ?: error("Cannot create Metal encoder")
-                encoder.setComputePipelineState(state)
-                buffers.forEachIndexed { index, buffer -> encoder.setBuffer(buffer, 0u, index.toULong()) }
-                if (constants.isNotEmpty()) constants.usePinned { encoder.setBytes(it.addressOf(0), constants.size.toULong(), buffers.size.toULong()) }
                 val width = minOf(state.threadExecutionWidth, state.maxTotalThreadsPerThreadgroup).coerceAtLeast(1u)
-                val grid = cValue<MTLSize> { this.width = count.toULong(); height = 1u; depth = 1u }
                 val group = cValue<MTLSize> { this.width = width; height = 1u; depth = 1u }
-                encoder.dispatchThreads(grid, group)
-                encoder.endEncoding()
+                // Each encoder uses tracked buffers. Metal orders access between dependent passes.
+                for (step in steps) {
+                    val encoder = command.computeCommandEncoder() ?: error("Cannot create Metal encoder")
+                    try {
+                        encoder.setComputePipelineState(state)
+                        step.buffers.forEachIndexed { index, buffer ->
+                            encoder.setBuffer((buffer as SystemBuffer).value(), 0u, index.toULong())
+                        }
+                        val constants = step.constants
+                        if (constants.isNotEmpty()) constants.usePinned {
+                            encoder.setBytes(it.addressOf(0), constants.size.toULong(), step.buffers.size.toULong())
+                        }
+                        val grid = cValue<MTLSize> { this.width = step.elementCount.toULong(); height = 1u; depth = 1u }
+                        encoder.dispatchThreads(grid, group)
+                    } finally {
+                        encoder.endEncoding()
+                    }
+                }
                 command.commit()
             }
             override fun waitForCompletion() = command.waitUntilCompleted()
@@ -108,7 +117,7 @@ internal class SystemCommand(
     override fun close() {
         command = null
         state = null
-        buffers = emptyList()
+        steps = emptyList()
     }
 }
 

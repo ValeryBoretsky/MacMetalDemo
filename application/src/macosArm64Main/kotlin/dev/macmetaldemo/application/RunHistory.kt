@@ -7,12 +7,16 @@ class RunHistory(private val registry: AlgorithmRegistry) {
     fun record(result: RunResult) {
         results[Triple(result.descriptor.key, result.request.mode, result.request.visualizationEnabled)] = result
     }
+
+    fun matchingCalculationNs(result: RunResult, mode: ExecutionMode): Long? {
+        return results[Triple(result.descriptor.key, mode, result.request.visualizationEnabled)]?.computeNs?.takeIf { it > 0 }
+    }
     fun speedIncrease(result: RunResult): Double? {
         val algorithm = registry.find(result.request.algorithmId) ?: return null
         if (ExecutionMode.CPU_SINGLE !in algorithm.supportedModes) return null
-        val baseline = results[Triple(result.descriptor.key, ExecutionMode.CPU_SINGLE, result.request.visualizationEnabled)] ?: return null
-        if (baseline.computeNs <= 0 || result.computeNs <= 0) return null
-        return baseline.computeNs.toDouble() / result.computeNs
+        val baselineNs = matchingCalculationNs(result, ExecutionMode.CPU_SINGLE) ?: return null
+        if (result.computeNs <= 0) return null
+        return baselineNs.toDouble() / result.computeNs
     }
 }
 
